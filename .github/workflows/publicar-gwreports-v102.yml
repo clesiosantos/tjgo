@@ -1,0 +1,107 @@
+name: Publicar GW Reports v1.0.2
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publicar-gwreports-v102.yml'
+permissions:
+  contents: write
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Corrigir API HTTP 206 e indicar origem local
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile, hashlib
+          src = Path('downloads/GW_Reports_v1.0.1.zip')
+          dst = Path('downloads/GW_Reports_v1.0.2.zip')
+          assert src.exists()
+          with zipfile.ZipFile(src) as original:
+              files={name:original.read(name) for name in original.namelist()
+                     if not name.endswith('/') and name != 'gwreports/SHA256SUMS.txt'}
+          api_path='gwreports/inc/api.php'
+          api=files[api_path]
+          marker=b'    public static function test(): string\n'
+          assert api.count(marker)==1
+          injection=b"""    /** GLPI v2.3 may paginate with HTTP 206 Partial Content. */
+    public static function validTicketListStatus(int $status, ?array $decoded): bool
+    {
+        if (!in_array($status, [200, 206], true) || $decoded === null) {
+            return false;
+        }
+        if (array_is_list($decoded)) {
+            return true;
+        }
+        return isset($decoded['data']) && is_array($decoded['data'])
+            && array_is_list($decoded['data']);
+    }
+
+"""
+          api=api.replace(marker,injection+marker)
+          before=b"""            [$verify] = self::request($apiBase . '/v2.3/Assistance/Ticket?limit=1', 'GET',
+                ['Accept: application/json', 'Authorization: Bearer ' . $token['access_token']]);
+            if ($verify !== 200) {
+                throw new RuntimeException('Token recebido, mas a leitura de chamados falhou. HTTP ' . $verify . '.');
+            }
+            return 'Conex\xc3\xa3o OAuth2 confirmada e leitura de chamados autorizada (HTTP 200).';"""
+          after=b"""            [$verify, $ticketList] = self::request($apiBase . '/v2.3/Assistance/Ticket?limit=1', 'GET',
+                ['Accept: application/json', 'Authorization: Bearer ' . $token['access_token']]);
+            if (!self::validTicketListStatus($verify, $ticketList)) {
+                throw new RuntimeException('Token recebido, mas a leitura de chamados n\xc3\xa3o retornou uma lista JSON v\xc3\xa1lida. HTTP ' . $verify . '.');
+            }
+            return 'Conex\xc3\xa3o OAuth2 confirmada e leitura de chamados autorizada (HTTP ' . $verify . '). ' .
+                'Este \xc3\xa9 um teste de acesso: os dados do Relat\xc3\xb3rio UST continuam vindo do GLPI local.';"""
+          assert api.count(before)==1, 'Formato da API mudou'
+          files[api_path]=api.replace(before,after)
+          setup_path='gwreports/setup.php'
+          assert files[setup_path].count(b"'1.0.1'")==1
+          files[setup_path]=files[setup_path].replace(b"'1.0.1'",b"'1.0.2'")
+          cfg_path='gwreports/front/config.php'
+          msg=b"""echo '<p class="text-muted">A API \xc3\xa9 opcional: os relat\xc3\xb3rios consultam diretamente o banco do GLPI local. A configura\xc3\xa7\xc3\xa3o abaixo permite testar a autentica\xc3\xa7\xc3\xa3o da API do ambiente.</p>';"""
+          replacement=b"""echo '<div class="alert alert-info">Fonte atual do Relat\xc3\xb3rio UST: <strong>este GLPI (banco local)</strong>. As credenciais abaixo testam o acesso a outra API, mas n\xc3\xa3o importam chamados ou UST remotamente.</div>';"""
+          assert files[cfg_path].count(msg)==1
+          files[cfg_path]=files[cfg_path].replace(msg,replacement)
+          report_path='gwreports/front/report.php'
+          marker=b"""echo '</div>';
+if ($error !== '') {"""
+          assert files[report_path].count(marker)==1
+          files[report_path]=files[report_path].replace(marker,b"""echo '</div>';
+echo '<div class="alert alert-info py-2" role="status">Origem deste relat\xc3\xb3rio: <strong>GLPI local</strong>. A URL da API configurada n\xc3\xa3o \xc3\xa9 usada na consulta dos chamados ou da UST.</div>';
+if ($error !== '') {""")
+          readme='gwreports/README.md'
+          text=files[readme].decode('utf-8')
+          text=text.replace('**Vers\xc3\xa3o:** 1.0.1','**Vers\xc3\xa3o:** 1.0.2').replace('GW_Reports_v1.0.1.zip','GW_Reports_v1.0.2.zip')
+          text+='\n\n## v1.0.2\nAceita HTTP 206 paginado na consulta de teste OAuth e identifica explicitamente o banco local como origem dos dados do relat\xc3\xb3rio. A API configurada n\xc3\xa3o substitui a consulta local.\n'
+          files[readme]=text.encode('utf-8')
+          files['gwreports/tests/api_206.php']=b"""<?php
+require_once __DIR__ . '/../inc/api.php';
+foreach ([[200, [], true], [206, [], true], [206, [['id'=>8]], true], [206, null, false], [401, [], false], [206, ['error'=>'bad'], false]] as [$code, $data, $expected]) {
+    if (PluginGwreportsApi::validTicketListStatus($code, $data) !== $expected) {
+        exit(1);
+    }
+}
+echo "OK API HTTP 206\n";
+"""
+          manifest=''.join(hashlib.sha256(content).hexdigest()+'  '+name[len('gwreports/'):]+ '\n'
+                            for name,content in sorted(files.items()))
+          files['gwreports/SHA256SUMS.txt']=manifest.encode()
+          with zipfile.ZipFile(dst,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+              for name,content in sorted(files.items()):
+                  z.writestr(name,content)
+          with zipfile.ZipFile(dst) as z:
+              assert z.testzip() is None
+              assert b'validTicketListStatus' in z.read(api_path)
+          print('Publicado',dst, dst.stat().st_size)
+          PY
+      - name: Commit do ZIP publico
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/GW_Reports_v1.0.2.zip
+          git diff --cached --quiet || git commit -m "GW Reports v1.0.2 - corrigir HTTP 206 e origem dos dados"
+          git push
