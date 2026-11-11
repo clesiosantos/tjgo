@@ -14,7 +14,7 @@ jobs:
         with:
           persist-credentials: true
       - name: Corrigir API HTTP 206 e indicar origem local
-        run: |
+                  run: |
           python3 - <<'PY'
           from pathlib import Path
           import zipfile, hashlib
@@ -29,19 +29,19 @@ jobs:
           marker=b'    public static function test(): string\n'
           assert api.count(marker)==1
           injection=b"""    /** GLPI v2.3 may paginate with HTTP 206 Partial Content. */
-    public static function validTicketListStatus(int $status, ?array $decoded): bool
-    {
-        if (!in_array($status, [200, 206], true) || $decoded === null) {
+              public static function validTicketListStatus(int $status, ?array $decoded): bool
+              {
+                  if (!in_array($status, [200, 206], true) || $decoded === null) {
             return false;
-        }
-        if (array_is_list($decoded)) {
+                  }
+                  if (array_is_list($decoded)) {
             return true;
-        }
-        return isset($decoded['data']) && is_array($decoded['data'])
+                  }
+                  return isset($decoded['data']) && is_array($decoded['data'])
             && array_is_list($decoded['data']);
-    }
+              }
 
-"""
+          """
           api=api.replace(marker,injection+marker)
           before=b"""            [$verify] = self::request($apiBase . '/v2.3/Assistance/Ticket?limit=1', 'GET',
                 ['Accept: application/json', 'Authorization: Bearer ' . $token['access_token']]);
@@ -68,25 +68,25 @@ jobs:
           files[cfg_path]=files[cfg_path].replace(msg,replacement)
           report_path='gwreports/front/report.php'
           marker=b"""echo '</div>';
-if ($error !== '') {"""
+          if ($error !== '') {"""
           assert files[report_path].count(marker)==1
           files[report_path]=files[report_path].replace(marker,b"""echo '</div>';
-echo '<div class="alert alert-info py-2" role="status">Origem deste relat\xc3\xb3rio: <strong>GLPI local</strong>. A URL da API configurada n\xc3\xa3o \xc3\xa9 usada na consulta dos chamados ou da UST.</div>';
-if ($error !== '') {""")
+          echo '<div class="alert alert-info py-2" role="status">Origem deste relat\xc3\xb3rio: <strong>GLPI local</strong>. A URL da API configurada n\xc3\xa3o \xc3\xa9 usada na consulta dos chamados ou da UST.</div>';
+          if ($error !== '') {""")
           readme='gwreports/README.md'
           text=files[readme].decode('utf-8')
           text=text.replace('**Vers\xc3\xa3o:** 1.0.1','**Vers\xc3\xa3o:** 1.0.2').replace('GW_Reports_v1.0.1.zip','GW_Reports_v1.0.2.zip')
           text+='\n\n## v1.0.2\nAceita HTTP 206 paginado na consulta de teste OAuth e identifica explicitamente o banco local como origem dos dados do relat\xc3\xb3rio. A API configurada n\xc3\xa3o substitui a consulta local.\n'
           files[readme]=text.encode('utf-8')
           files['gwreports/tests/api_206.php']=b"""<?php
-require_once __DIR__ . '/../inc/api.php';
-foreach ([[200, [], true], [206, [], true], [206, [['id'=>8]], true], [206, null, false], [401, [], false], [206, ['error'=>'bad'], false]] as [$code, $data, $expected]) {
-    if (PluginGwreportsApi::validTicketListStatus($code, $data) !== $expected) {
-        exit(1);
-    }
-}
-echo "OK API HTTP 206\n";
-"""
+          require_once __DIR__ . '/../inc/api.php';
+          foreach ([[200, [], true], [206, [], true], [206, [['id'=>8]], true], [206, null, false], [401, [], false], [206, ['error'=>'bad'], false]] as [$code, $data, $expected]) {
+              if (PluginGwreportsApi::validTicketListStatus($code, $data) !== $expected) {
+                  exit(1);
+              }
+          }
+          echo "OK API HTTP 206\n";
+          """
           manifest=''.join(hashlib.sha256(content).hexdigest()+'  '+name[len('gwreports/'):]+ '\n'
                             for name,content in sorted(files.items()))
           files['gwreports/SHA256SUMS.txt']=manifest.encode()
