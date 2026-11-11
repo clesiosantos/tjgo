@@ -56,8 +56,10 @@ jobs:
             }
             return 'Conex\xc3\xa3o OAuth2 confirmada e leitura de chamados autorizada (HTTP ' . $verify . '). ' .
                 'Este \xc3\xa9 um teste de acesso: os dados do Relat\xc3\xb3rio UST continuam vindo do GLPI local.';"""
-          assert api.count(before)==1, 'Formato da API mudou'
-          files[api_path]=api.replace(before,after)
+          begin = api.find(b"            [$verify] = self::request($apiBase . '/v2.3/Assistance/Ticket?limit=1'")
+          finish = api.find(b';', api.find(b'\n            return ', begin)) + 1
+          assert begin >= 0 and finish > begin and finish - begin < 1200, 'Nao identificou bloco da consulta a Ticket'
+          files[api_path] = api[:begin] + after + api[finish:]
           setup_path='gwreports/setup.php'
           assert files[setup_path].count(b"'1.0.1'")==1
           files[setup_path]=files[setup_path].replace(b"'1.0.1'",b"'1.0.2'")
