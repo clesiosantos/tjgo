@@ -1,0 +1,69 @@
+name: Publicar GW Reports v1.0.1
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publicar-gwreports-v101.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Gerar ZIP corrigido para GLPI 11
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          import hashlib
+
+          origem = Path('downloads/GW_Reports_v1.0.0.zip')
+          destino = Path('downloads/GW_Reports_v1.0.1.zip')
+          assert origem.is_file(), 'Pacote original ausente'
+          hashes = {}
+          alterados = set()
+          with zipfile.ZipFile(origem, 'r') as origem_zip, zipfile.ZipFile(destino, 'w', compression=zipfile.ZIP_DEFLATED) as destino_zip:
+              for info in origem_zip.infolist():
+                  if info.is_dir() or info.filename == 'gwreports/SHA256SUMS.txt':
+                      continue
+                  data = origem_zip.read(info.filename)
+                  if info.filename == 'gwreports/front/config.php':
+                      anterior = b'    Session::checkCSRF($_POST);'
+                      assert data.count(anterior) == 1, 'Verificacao CSRF inesperada; abortar'
+                      data = data.replace(
+                          anterior,
+                          b'    // O controlador GLPI 11 verifica o token CSRF antes desta pagina.\n'
+                          b'    // Nao validar novamente o mesmo token.'
+                      )
+                      alterados.add('config')
+                  elif info.filename == 'gwreports/setup.php':
+                      anterior = b"define('PLUGIN_GWREPORTS_VERSION', '1.0.0');"
+                      assert data.count(anterior) == 1, 'Versao inesperada; abortar'
+                      data = data.replace(anterior, b"define('PLUGIN_GWREPORTS_VERSION', '1.0.1');")
+                      alterados.add('setup')
+                  destino_zip.writestr(info.filename, data)
+                  hashes[info.filename] = hashlib.sha256(data).hexdigest()
+              assert alterados == {'setup', 'config'}, alterados
+              resumo = ''.join(f'{digest}  {name}\n' for name, digest in sorted(hashes.items()))
+              destino_zip.writestr('gwreports/SHA256SUMS.txt', resumo)
+          with zipfile.ZipFile(destino, 'r') as result_zip:
+              assert result_zip.testzip() is None
+              assert b'Session::checkCSRF(' not in result_zip.read('gwreports/front/config.php')
+              assert b'1.0.1' in result_zip.read('gwreports/setup.php')
+          print('Publicado:', destino, destino.stat().st_size, hashlib.sha256(destino.read_bytes()).hexdigest())
+          PY
+
+      - name: Publicar pacote na pasta downloads
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/GW_Reports_v1.0.1.zip
+          git diff --cached --quiet || git commit -m "Publicar GW Reports v1.0.1 com ajuste CSRF"
+          git push
